@@ -153,8 +153,10 @@ def extract_dns_features(hostname):
     if is_ip_address(hostname):
         return features
 
+    registered_domain = get_registered_domain(hostname)
+
     # -----------------------------------------------------
-    # A Record / Resolved IP Count
+    # A Record / Resolved IP Count (실제 hostname 기준)
     # -----------------------------------------------------
 
     try:
@@ -171,12 +173,17 @@ def extract_dns_features(hostname):
         features["dns_a_exists"] = None
         features["resolved_ip_count"] = None
 
+    # registered domain을 기준으로 MX, NS 레코드를 조회하는 이유는, 일부 도메인에서는 서브도메인에 대해 MX/NS 레코드가 없을 수 있기 때문이다. 
+    # 따라서 등록 도메인을 기준으로 MX/NS 레코드를 조회하는 것이 일반적이다.
+    if registered_domain is None:
+        return features
+
     # -----------------------------------------------------
-    # MX Record
+    # MX Record (registered domain 기준)
     # -----------------------------------------------------
 
     try:
-        resolver.resolve(hostname, "MX")
+        resolver.resolve(registered_domain, "MX")
         features["dns_mx_exists"] = 1
 
     except (resolver.NoAnswer, resolver.NXDOMAIN):
@@ -186,11 +193,11 @@ def extract_dns_features(hostname):
         features["dns_mx_exists"] = None
 
     # -----------------------------------------------------
-    # NS Record
+    # NS Record (registered domain 기준)
     # -----------------------------------------------------
 
     try:
-        ns_answers = resolver.resolve(hostname, "NS")
+        ns_answers = resolver.resolve(registered_domain, "NS")
         features["dns_ns_count"] = len(ns_answers)
 
     except (resolver.NoAnswer, resolver.NXDOMAIN):
