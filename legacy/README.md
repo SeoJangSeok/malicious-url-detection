@@ -1,1 +1,0 @@
-This directory contains the original version of the malicious URL detection project before the feature engineering and system redesign.
