@@ -391,10 +391,3 @@ def extract_host_network_features(url):
     features.update(extract_http_features(normalized_url))
 
     return features
-
-features = extract_host_network_features(
-    "https://google.com"
-)
-
-print(features)
-print(len(features))
