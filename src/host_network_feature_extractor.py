@@ -1,50 +1,72 @@
 from datetime import datetime
+from dns import resolver
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
-from dns import resolver
 
-import ipaddress
-import requests
 import whois
+import ipaddress
 import tldextract
+import requests
 
-REQUEST_TIMEOUT = 5 # seconds
+# =========================================================
+# Constants
+# =========================================================
+
+HTTP_REQUEST_TIMEOUT_SECONDS = 5
+
 
 # =========================================================
 # Helper Functions
 # =========================================================
 
-def normalize_url(url):
-    """
-    URL에 scheme이 없는 경우 https://를 추가한다.
-    """
-    url = url.strip()
+def normalize_url(raw_url):
+    '''
+    URL 처리 및 HTTP 요청을 위한 전처리
 
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+    - 입력된 URL에 scheme이 없는 경우 'https://'를 추가해준다.
+    - 이는 scheme이 없는 경우 urlparse()가 hostname, path 등을 정상적으로
+    구분하지 못하는 경우가 있으므로 정상적인 구분을 위해 임시로 추가한다.
+    '''
+    raw_url = raw_url.strip()
 
-    return url
+    if not raw_url.lower().startswith(('http://', 'https://')):
+        return "https://" + raw_url
+
+    return raw_url
+
+
+def is_ip_address(hostname):
+    '''
+    hostname이 IP 주소 형식인지 확인한다.
+
+    반환값
+    - IP 주소이면 -> 1
+    - 그렇지 않으면 -> 0
+    '''
+    try:
+        ipaddress.ip_address(hostname)
+        return 1
+    
+    except ValueError:
+        return 0
+
 
 def get_registered_domain(hostname):
-    """
-    hostname에서 등록 도메인(domain + public suffix)을 반환한다.
-    """
+    '''
+    hostname에서 등록 도메인을 추출한다.
+
+    예시
+    - www.example.com -> example.com
+    - login.shop.example.co.kr -> example.co.kr
+
+    정상적인 등록 도메인을 구할 수 없으면 None을 반환.
+    '''
     extracted = tldextract.extract(hostname)
 
     if not extracted.domain or not extracted.suffix:
         return None
 
-    return f"{extracted.domain}.{extracted.suffix}"
-
-def is_ip_address(hostname):
-    '''
-    hostname이 IP 주소인지 확인한다.
-    '''
-    try:
-        ipaddress.ip_address(hostname)
-        return True
-    except ValueError:
-        return False
+    return f'{extracted.domain}.{extracted.suffix}'
 
 
 # =========================================================
@@ -52,76 +74,64 @@ def is_ip_address(hostname):
 # =========================================================
 
 def extract_whois_features(hostname):
-    """
-    WHOIS를 이용해 다음 Feature를 추출한다.
+    '''
+    WHOIS 정보를 이용해 도메인 관련 특징값을 추출한다.
 
-    - domain_age_days
-    - registration_period_days
-    """
+    반환 Feature
+    - domain_age_days:
+        도메인이 생성된 후 현재까지 지난 일수
+    
+    - registration_period_days:
+        도메인의 생성일부터 만료일까지의 등록 기간
+
+    반환값 규칙
+    - 숫자: 정상적으로 계산된 Feature 값
+    - -1: hostname이 IP 주소라 WHOIS Feature 적용 불가
+    - None: WHOIS 조회 실패 또는 정보 미공개
+    '''
     features: dict[str, int | None] = {
-        "domain_age_days": None,
-        "registration_period_days": None,
+        'domain_age_days': None,
+        'registration_period_days': None
     }
 
-    # IP 주소에는 도메인 WHOIS Feature를 적용하지 않음
+    # IP 주소에는 도메인 WHOIS Feature를 적용할 수 없음
     if is_ip_address(hostname):
-        return features
+        return {'domain_age_days': -1, 'registration_period_days': -1}
 
+
+    # WHOIS는 subdomain이 아닌 실제 등록 도메인을 기준으로 조회하므로
+    # hostname에서 domain + public suffix를 추출한다.
     registered_domain = get_registered_domain(hostname)
 
+    # 등록 도메인을 구할 수 없는 경우
     if registered_domain is None:
         return features
 
     try:
         domain_info = whois.whois(registered_domain)
 
-        creation_date = domain_info.get("creation_date")
-        expiration_date = domain_info.get("expiration_date")
+        creation_date = domain_info.get('creation_date')
+        expiration_date = domain_info.get('expiration_date')
 
-        # creation_date가 여러 개인 경우 가장 오래된 날짜 사용
+        # creation_date가 여러 개일 경우 가장 오래된 날짜 사용
         if isinstance(creation_date, list):
-            valid_creation_dates = [
-                date
-                for date in creation_date
-                if date is not None
-            ]
+            valid_creation_dates = [date for date in creation_date if date is not None]
+            creation_date = (min(valid_creation_dates) if valid_creation_dates else None)
 
-            creation_date = (
-                min(valid_creation_dates)
-                if valid_creation_dates
-                else None
-            )
-
-        # expiration_date가 여러 개인 경우 가장 먼 날짜 사용
+        # expiration_date가 여러 개일 경우 가장 이후의 날짜 사용
         if isinstance(expiration_date, list):
-            valid_expiration_dates = [
-                date
-                for date in expiration_date
-                if date is not None
-            ]
+            valid_expiration_dates = [date for date in expiration_date if date is not None]
+            expiration_date = (max(valid_expiration_dates) if valid_expiration_dates else None)
 
-            expiration_date = (
-                max(valid_expiration_dates)
-                if valid_expiration_dates
-                else None
-            )
-
-        # Domain Age
+        # 도메인 생성 후 현재까지 지난 일수
         if creation_date is not None:
             now = datetime.now(creation_date.tzinfo)
 
-            features["domain_age_days"] = (
-                now - creation_date
-            ).days
+            features['domain_age_days'] = (now - creation_date).days
 
-        # Registration Period
-        if (
-            creation_date is not None
-            and expiration_date is not None
-        ):
-            features["registration_period_days"] = (
-                expiration_date - creation_date
-            ).days
+        # 최초 생성일부터 현재 등록 만료일까지의 기간      
+        if creation_date is not None and expiration_date is not None:
+            features['registration_period_days'] = (expiration_date - creation_date).days
 
     except Exception:
         pass
@@ -134,77 +144,91 @@ def extract_whois_features(hostname):
 # =========================================================
 
 def extract_dns_features(hostname):
-    """
-    DNS를 이용해 다음 Feature를 추출한다.
+    '''
+    DNS 정보를 이용해 hostname 관련 특징값을 추출한다.
 
-    - dns_a_exists
-    - resolved_ip_count
-    - dns_mx_exists
-    - dns_ns_count
-    """
+    반환 Feature
+    - dns_a_exists:
+        hostname의 A 레코드 존재 여부
+
+    - resolved_ip_count:
+        hostname이 몇 개의 IPv4 주소로 해석되는지 개수
+
+    - dns_mx_exists:
+        registered domain의 MX 레코드 존재 여부
+
+    - dns_ns_count:
+        registered domain의 NS 레코드 개수
+
+    반환값 규칙
+    - -1: hostname이 IP 주소라 DNS Feature 적용 불가
+    - None: DNS 조회 실패
+
+    dns_a_exists / dns_mx_exists
+    - 1: 레코드 존재
+    - 0: 레코드가 없거나 도메인이 존재하지 않음
+
+    resolved_ip_count / dns_ns_count
+    - 0 이상: 조회된 레코드 개수
+    '''
     features: dict[str, int | None] = {
-        "dns_a_exists": None,
-        "resolved_ip_count": None,
-        "dns_mx_exists": None,
-        "dns_ns_count": None,
+        'dns_a_exists': None,
+        'resolved_ip_count': None,
+        'dns_mx_exists': None,
+        'dns_ns_count': None
     }
 
-    # IP 주소에는 DNS Feature를 적용하지 않음
+    # hostname 자체가 IP 주소라면 DNS 이름 해석이 필요하지 않음
     if is_ip_address(hostname):
-        return features
-
-    registered_domain = get_registered_domain(hostname)
-
-    # -----------------------------------------------------
-    # A Record / Resolved IP Count (실제 hostname 기준)
-    # -----------------------------------------------------
+        return {
+            'dns_a_exists': -1,
+            'resolved_ip_count': -1,
+            'dns_mx_exists': -1,
+            'dns_ns_count': -1
+        }
 
     try:
-        a_answers = resolver.resolve(hostname, "A")
+        # hostname의 A 레코드(IPv4 주소)를 조회
+        a_answers = resolver.resolve(hostname, 'A')
 
-        features["dns_a_exists"] = 1
-        features["resolved_ip_count"] = len(a_answers)
+        features['dns_a_exists'] = 1
+        features['resolved_ip_count'] = len(a_answers)
 
     except (resolver.NoAnswer, resolver.NXDOMAIN):
-        features["dns_a_exists"] = 0
-        features["resolved_ip_count"] = 0
+        features['dns_a_exists'] = 0
+        features['resolved_ip_count'] = 0
 
     except Exception:
-        features["dns_a_exists"] = None
-        features["resolved_ip_count"] = None
+        features['dns_a_exists'] = None
+        features['resolved_ip_count'] = None
 
-    # registered domain을 기준으로 MX, NS 레코드를 조회하는 이유는, 일부 도메인에서는 서브도메인에 대해 MX/NS 레코드가 없을 수 있기 때문이다. 
-    # 따라서 등록 도메인을 기준으로 MX/NS 레코드를 조회하는 것이 일반적이다.
+    # MX / NS 조회를 위해 registered domain 추출
+    registered_domain = get_registered_domain(hostname)
+
     if registered_domain is None:
         return features
 
-    # -----------------------------------------------------
-    # MX Record (registered domain 기준)
-    # -----------------------------------------------------
-
+    # MX Record
     try:
-        resolver.resolve(registered_domain, "MX")
-        features["dns_mx_exists"] = 1
+        resolver.resolve(registered_domain, 'MX')
+        features['dns_mx_exists'] = 1
 
     except (resolver.NoAnswer, resolver.NXDOMAIN):
-        features["dns_mx_exists"] = 0
+        features['dns_mx_exists'] = 0
 
     except Exception:
-        features["dns_mx_exists"] = None
+        features['dns_mx_exists'] = None
 
-    # -----------------------------------------------------
-    # NS Record (registered domain 기준)
-    # -----------------------------------------------------
-
+    # NS Record
     try:
-        ns_answers = resolver.resolve(registered_domain, "NS")
-        features["dns_ns_count"] = len(ns_answers)
+        ns_answers = resolver.resolve(registered_domain, 'NS')
+        features['dns_ns_count'] = len(ns_answers)
 
     except (resolver.NoAnswer, resolver.NXDOMAIN):
-        features["dns_ns_count"] = 0
+        features['dns_ns_count'] = 0
 
     except Exception:
-        features["dns_ns_count"] = None
+        features['dns_ns_count'] = None
 
     return features
 
@@ -214,86 +238,115 @@ def extract_dns_features(hostname):
 # =========================================================
 
 def extract_http_features(url):
-    """
-    한 번의 HTTP 요청으로 다음 Feature를 추출한다.
+    '''
+    HTTP 요청을 이용해 URL 관련 특징값을 추출한다.
 
-    - redirect_count
-    - favicon_external_domain
-    """
+    반환 Feature
+    - redirect_count:
+        최종 페이지까지 발생한 redirect 횟수
+
+    - favicon_exists:
+        favicon 존재 여부
+
+    - favicon_external_domain:
+        favicon이 페이지와 다른 registered domain에 존재하는지 여부
+
+    반환값 규칙
+    - redirect_count 반환값
+        - 0 이상: redirect 횟수
+        - None: HTTP 요청 실패
+
+    - favicon_exists
+        - 1: favicon 존재
+        - 0: favicon 없음
+        - None: 확인 불가
+
+    - favicon_external_domain 반환값
+        - 0: favicon이 페이지와 같은 registered domain에 존재
+        - 1: favicon이 다른 registered domain에 존재
+        - None: favicon 또는 domain 정보를 확인할 수 없음
+
+    주의: 입력 URL에는 http:// 또는 https:// scheme이 포함되어 있어야 한다.
+    '''
     features: dict[str, int | None] = {
-        "redirect_count": None,
-        "favicon_external_domain": None,
+        'redirect_count': None,
+        'favicon_exists': None,
+        'favicon_external_domain': None
     }
 
     try:
         response = requests.get(
             url,
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True,
+            timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
+            allow_redirects=True
         )
 
-        # Redirect Count
-        features["redirect_count"] = len(response.history)
+        # Redirect 횟수
+        features['redirect_count'] = len(response.history)
 
-        # HTML이 아니면 favicon 분석은 수행하지 않음
-        content_type = response.headers.get("Content-Type", "")
+        # HTML 문서가 아니라면 favicon 분석 불가
+        content_type = response.headers.get('Content-Type', '')
 
-        if "text/html" not in content_type.lower():
+        if 'text/html' not in content_type.lower():
             return features
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser",
-        )
+        soup = BeautifulSoup(response.text, 'html.parser')
 
         favicon_href = None
 
-        # favicon 태그 탐색
-        for link in soup.find_all("link"):
-            rel = link.get("rel")
+        # favicon 관련 <link> 태그 탐색
+        for link in soup.find_all('link'):
+            rel = link.get('rel')
 
-            if rel and "icon" in rel:
-                href = link.get("href")
+            if rel and 'icon' in rel:
+                href = link.get('href')
 
-                if isinstance(href, str):
-                    favicon_href = href
+                if isinstance(href, str) and href.strip():
+                    favicon_href = href.strip()
+                    break
 
-                break
+        # favicon 태그가 존재하는 경우
+        if favicon_href is not None:
+            favicon_url = urljoin(response.url, favicon_href)
 
-        # favicon 태그가 없으면 브라우저 기본 위치 사용
-        if favicon_href is None:
-            favicon_href = "/favicon.ico"
+        # favicon 태그가 없으면 기본 위치 /favicon.ico 확인
+        else:
+            favicon_url = urljoin(response.url, '/favicon.ico')
 
-        favicon_url = urljoin(
-            response.url,
-            favicon_href,
-        )
+        # 실제 favicon 존재 여부 확인
+        try:
+            favicon_response = requests.get(
+                favicon_url,
+                timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
+                allow_redirects=True
+            )
 
-        page_hostname = (
-            urlparse(response.url).hostname or ""
-        )
+            favicon_content_type = favicon_response.headers.get('Content-Type', '')
 
-        favicon_hostname = (
-            urlparse(favicon_url).hostname or ""
-        )
+            if favicon_response.ok and 'image/' in favicon_content_type.lower():
+                features['favicon_exists'] = 1
 
-        page_domain = get_registered_domain(
-            page_hostname
-        )
+            else:
+                features['favicon_exists'] = 0
+                return features
 
-        favicon_domain = get_registered_domain(
-            favicon_hostname
-        )
-
-        if (
-            page_domain is None
-            or favicon_domain is None
-        ):
+        except Exception:
             return features
 
-        features["favicon_external_domain"] = (
-            1 if page_domain != favicon_domain else 0
-        )
+        # 페이지와 favicon의 hostname 추출
+        page_hostname = urlparse(response.url).hostname or ''
+
+        favicon_hostname = urlparse(favicon_response.url).hostname or ''
+
+        # registered domain 추출
+        page_domain = get_registered_domain(page_hostname)
+
+        favicon_domain = get_registered_domain(favicon_hostname)
+
+        if page_domain is None or favicon_domain is None:
+            return features
+
+        features['favicon_external_domain'] = int(page_domain != favicon_domain)
 
     except Exception:
         pass
@@ -301,14 +354,11 @@ def extract_http_features(url):
     return features
 
 
-# =========================================================
-# Integrated Host / Network Feature Extractor
-# =========================================================
-
 def extract_host_network_features(url):
-    """
-    URL에서 총 8개의 Host / Network Feature를 추출한다.
+    '''
+    URL에서 Host / Network Feature를 통합 추출한다.
 
+    반환 Feature
     WHOIS
     - domain_age_days
     - registration_period_days
@@ -321,56 +371,30 @@ def extract_host_network_features(url):
 
     HTTP
     - redirect_count
+    - favicon_exists
     - favicon_external_domain
-    """
-    url = normalize_url(url)
 
-    parsed = urlparse(url)
-    hostname = parsed.hostname or ""
+    주의
+    - HTTP Feature 추출 과정에서 실제 URL에 요청을 보낸다.
+    - 신뢰할 수 없는 악성 URL에는 직접 사용하지 않는다.
+    '''
 
-    features = {}
+    normalized_url = normalize_url(url)
 
-    features.update(
-        extract_whois_features(hostname)
-    )
-
-    features.update(
-        extract_dns_features(hostname)
-    )
-
-    features.update(
-        extract_http_features(url)
-    )
-
-    return features
-
-
-#---------------------------------------------------------
-# HTTP 호출 없이 WHOIS, DNS Feature만 추출하는 함수
-#---------------------------------------------------------
-def extract_safe_host_network_features(url):
-    """
-    URL에서 HTTP 요청 없이 안전하게 추출 가능한
-    Host / Network Feature 6개를 반환한다.
-
-    WHOIS
-    - domain_age_days
-    - registration_period_days
-
-    DNS
-    - dns_a_exists
-    - resolved_ip_count
-    - dns_mx_exists
-    - dns_ns_count
-    """
-    url = normalize_url(url)
-
-    parsed = urlparse(url)
-    hostname = parsed.hostname or ""
+    parsed = urlparse(normalized_url)
+    hostname = parsed.hostname or ''
 
     features = {}
 
     features.update(extract_whois_features(hostname))
     features.update(extract_dns_features(hostname))
+    features.update(extract_http_features(normalized_url))
 
     return features
+
+features = extract_host_network_features(
+    "https://google.com"
+)
+
+print(features)
+print(len(features))
