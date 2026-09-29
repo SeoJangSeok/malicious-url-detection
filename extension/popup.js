@@ -52,7 +52,7 @@ document
 
             if (!response.ok) {
                 throw new Error(
-                    'API 요청 실패: ${response.status}'
+                    `API 요청 실패: ${response.status}`
                 )
             }
 
@@ -61,36 +61,28 @@ document
             let message;
             let resultClass;
 
-            switch (data.risk_level) {
-                case "SAFE":
-                    message = "정상으로 판단된 URL입니다.";
+            switch (data.final_prediction) {
+                case "NORMAL":
+                    resultTitle = "정상";
+                    message = "정상 URL로 판단되었습니다.";
                     resultClass = "safe";
                     break;
 
-                case "SUSPICIOUS":
-                    message = "의심스러운 특징이 감지되었습니다.";
-                    resultClass = "suspicious";
-                    break;
-
                 case "MALICIOUS":
-                    message = "악성 URL일 가능성이 높습니다.";
-                    resultClass = "malicious"
-                    break;
-
-                case "HIGH_RISK":
-                    message = "매우 높은 위험이 감지되었습니다.";
-                    resultClass = "high-risk"
+                    resultTitle = "악성";
+                    message = "악성 URL로 판단되었습니다.";
+                    resultClass = "malicious";
                     break;
 
                 default:
-                    message = "판정 결과를 확인할 수 없습니다.";
-                    resultClass = "unknown"
+                    message = "판정 결과를 확인할 수 없습니다."
+                    resultClass = "unknown";
             }
 
             resultElement.className = resultClass;
 
             resultElement.textContent =
-                `최종 위험도: ${data.risk_level}\n${message}`;
+                `${resultTitle}`;
 
         } catch (error) {
             console.error(error);
