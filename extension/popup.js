@@ -29,7 +29,7 @@ document
         // URL을 못 가져온 경우 요청하지 않음
         if (!currentUrl) {
             resultElement.textContent = "현재 페이지의 URL을 가져올 수 없습니다.";
-            return ;
+            return;
         }
 
         resultElement.textContent = "검사 중...";
@@ -53,11 +53,12 @@ document
             if (!response.ok) {
                 throw new Error(
                     `API 요청 실패: ${response.status}`
-                )
+                );
             }
 
             const data = await response.json();
 
+            let resultTitle;
             let message;
             let resultClass;
 
@@ -74,19 +75,58 @@ document
                     resultClass = "malicious";
                     break;
 
+                case "NOT_APPLICABLE":
+                    resultTitle = "검사 대상 아님";
+
+                    switch (data.host_type) {
+                        case "INVALID":
+                            message = "유효한 hostname을 확인할 수 없는 URL입니다.";
+                            break;
+
+                        case "RFC1918_PRIVATE":
+                            message = "사설 네트워크 주소입니다. 현재 검사 대상이 아닙니다.";
+                            break;
+                        
+                        case "LOOPBACK":
+                            message = "현재 사용 중인 기기의 Loopback 주소입니다.";
+                            break;
+
+                        case "LINK_LOCAL":
+                            message = "로컬 링크용 주소입니다. 현재 검사 대상이 아닙니다.";
+                            break;
+                        
+                        case "CGNAT":
+                            message = "CGNAT용 주소입니다. 현재 검사 대상이 아닙니다.";
+                            break;
+                        
+                        case "IPv6_UNSUPPORTED":
+                            message = "현재 IPv6 주소를 지원하지 않습니다.";
+                            break;
+                        
+                        default:
+                            message = "검사 대상이 아닌 특수 주소입니다.";
+                            break;
+                    }
+                    
+                    resultClass = "not-applicable";
+                    break;
+
                 default:
-                    message = "판정 결과를 확인할 수 없습니다."
+                    resultTitle = "판정 불가";
+                    message = "판정 결과를 확인할 수 없습니다.";
                     resultClass = "unknown";
+                    break;
             }
 
             resultElement.className = resultClass;
 
             resultElement.textContent =
-                `${resultTitle}`;
+                `${resultTitle}\n${message}`;
 
         } catch (error) {
             console.error(error);
 
+            resultElement.className = "unknown";
             resultElement.textContent =
                 "검사 중 오류가 발생했습니다.";
         }
