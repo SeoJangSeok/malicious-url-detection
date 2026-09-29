@@ -4,7 +4,7 @@ from pydantic import BaseModel, HttpUrl
 
 from predictor import predict_url
 
-app = FastAPI(title="Malicious URL Detection API", version="1.0.0.")
+app = FastAPI(title="Malicious URL Detection API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,11 +21,12 @@ class URLRequest(BaseModel):
 
 class PredictionResponse(BaseModel):
     url: str
-    rf_probability: float
-    rf_prediction: int
-    iso_anomaly_score: float
-    iso_prediction: int
-    anomaly_detected: bool
+    host_type: str
+    rf_probability: float | None
+    rf_prediction: int | None
+    iso_anomaly_score: float | None
+    iso_prediction: int | None
+    anomaly_detected: bool | None
     final_prediction: str
 
 
@@ -39,5 +40,8 @@ def predict(request: URLRequest):
     try:
         result = predict_url(str(request.url))
         return result
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Prediction failed: {str(e)}"
+        ) from e
