@@ -47,24 +47,6 @@ def extract_features(url):
 
 
 # =========================================================
-# Risk Combination
-# =========================================================
-
-
-def combine_predictions(rf_prediction, if_prediction):
-    if rf_prediction == 1 and if_prediction == 1:
-        return "HIGH_RISK"
-
-    if rf_prediction == 1 and if_prediction == 0:
-        return "MALICIOUS"
-
-    if rf_prediction == 0 and if_prediction == 1:
-        return "SUSPICIOUS"
-
-    return "SAFE"
-
-
-# =========================================================
 # URL Prediction
 # =========================================================
 
@@ -93,8 +75,7 @@ def predict_url(url):
     iso_anomaly_score = -iso_model.decision_function(iso_input_imputed)[0]
     iso_prediction = int(iso_anomaly_score >= iso_threshold)
 
-    # 두 모델 결과 결합
-    risk_level = combine_predictions(rf_prediction, iso_prediction)
+    final_prediction = "MALICIOUS" if rf_prediction == 1 else "NORMAL"
 
     return {
         "url": url,
@@ -102,7 +83,8 @@ def predict_url(url):
         "rf_prediction": rf_prediction,
         "iso_anomaly_score": float(iso_anomaly_score),
         "iso_prediction": iso_prediction,
-        "risk_level": risk_level,
+        "anomaly_detected": bool(iso_prediction),
+        "final_prediction": final_prediction,
     }
 
 
@@ -120,8 +102,7 @@ if __name__ == "__main__":
     print("RF 판정:", result["rf_prediction"])
     print("IF 이상 점수:", result["iso_anomaly_score"])
     print("IF 판정:", result["iso_prediction"])
-    print("최종 위험도:", result["risk_level"])
-
+    print("최종 판정:", result["final_prediction"])
 if __name__ == "__main__":
     test_url = "https://paypal3.vercel.app/"
 
@@ -132,4 +113,4 @@ if __name__ == "__main__":
     print("RF 판정:", result["rf_prediction"])
     print("IF 이상 점수:", result["iso_anomaly_score"])
     print("IF 판정:", result["iso_prediction"])
-    print("최종 위험도:", result["risk_level"])
+    print("최종 판정:", result["final_prediction"])
