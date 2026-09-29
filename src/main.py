@@ -25,7 +25,8 @@ class PredictionResponse(BaseModel):
     rf_prediction: int
     iso_anomaly_score: float
     iso_prediction: int
-    risk_level: str
+    anomaly_detected: bool
+    final_prediction: str
 
 
 @app.get("/")
